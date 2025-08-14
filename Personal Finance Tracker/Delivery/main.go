@@ -2,12 +2,13 @@ package main
 
 import (
 	"log"
-	"net/http"
 	"os"
 
-	"github.com/gin-gonic/gin"
+	"personal-finance-tracker/Delivery/router"
 	"personal-finance-tracker/Infrastructure/db"
-	
+	"personal-finance-tracker/Infrastructure/mongodb"
+	"personal-finance-tracker/Infrastructure/service"
+	usecase "personal-finance-tracker/UseCase"
 )
 
 func main() {
@@ -19,14 +20,24 @@ func main() {
 
 	dbName := os.Getenv("MONGO_DB")
 	if dbName == "" {
-		dbName = "Personal Finance Tracker"
+		dbName = "personal_finance_tracker" // Fixed: no spaces in database name
 	}
+
+	log.Printf("🔗 Connecting to MongoDB at: %s", mongoURI)
+	log.Printf("📊 Database name: %s", dbName)
 
 	// Connect to MongoDB
 	client, err := db.ConnectToMongoDB(mongoURI)
 	if err != nil {
 		log.Fatalf("❌ MongoDB connection failed: %v", err)
 	}
+
+	// Test the connection
+	err = client.Ping(nil, nil)
+	if err != nil {
+		log.Fatalf("❌ MongoDB ping failed: %v", err)
+	}
+	log.Println("✅ MongoDB connection successful!")
 
 	// Close connection when app exits
 	defer func() {
@@ -35,26 +46,31 @@ func main() {
 		}
 	}()
 
-	// Initialize Gin
-	router := gin.Default()
+	// Get database collection
+	database := client.Database(dbName)
+	userCollection := database.Collection("users")
+	log.Printf("📁 Using collection: %s", userCollection.Name())
 
-	// Health check endpoint
-	router.GET("/health", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{
-			"status":  "ok",
-			"message": "API is running and connected to MongoDB",
-		})
-	})
+	// Initialize repositories
+	userRepo := repository.NewUserRepository(userCollection)
 
-	// Example route to list DB name
-	router.GET("/db-info", func(c *gin.Context) {
-		c.JSON(http.StatusOK, gin.H{
-			"database": dbName,
-		})
-	})
+	// Initialize services
+	jwtSecret := os.Getenv("JWT_SECRET")
+	if jwtSecret == "" {
+		jwtSecret = "default-secret-key"
+	}
+	jwtService := services.NewJWTService(jwtSecret)
+
+	// Initialize use cases
+	userUsecase := usecase.NewUserUsecase(userRepo)
+
+	// Setup router with dependencies
+	router := router.SetupRouter(userUsecase, jwtService)
 
 	// Start server
-	log.Println("🚀 Server running on http://localhost:8080")
+	log.Println("🚀 Personal Finance Tracker API running on http://localhost:8080")
+	log.Printf("📊 Connected to database: %s", dbName)
+	
 	if err := router.Run(":8080"); err != nil {
 		log.Fatalf("❌ Failed to start server: %v", err)
 	}
